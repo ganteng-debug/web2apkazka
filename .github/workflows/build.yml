@@ -1,0 +1,29 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: zip url
+        required: true
+        type: string
+      tag:
+        description: tag
+        required: true
+        type: string
+      build_type:
+        description: build type
+        required: false
+        default: release
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: echo inputs
+        run: |
+          echo "zip_url=${{ inputs.zip_url }}"
+          echo "tag=${{ inputs.tag }}"
