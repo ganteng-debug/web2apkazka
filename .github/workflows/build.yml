@@ -4,15 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       zip_url:
-        description: zip url
+        description: "URL zip source Flutter"
         required: true
         type: string
       tag:
-        description: tag
+        description: "Tag/build id"
         required: true
         type: string
       build_type:
-        description: build type
+        description: "release atau debug"
         required: false
         default: release
         type: string
@@ -21,9 +21,80 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: checkout
-        uses: actions/checkout@v4
-      - name: echo inputs
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Download source zip
         run: |
-          echo "zip_url=${{ inputs.zip_url }}"
-          echo "tag=${{ inputs.tag }}"
+          set -e
+          mkdir -p work
+          curl -L --fail "${{ inputs.zip_url }}" -o source.zip
+          unzip -q source.zip -d work
+          # jika zip berisi 1 folder root, masuk ke dalamnya
+          count=$(find work -mindepth 1 -maxdepth 1 -type d | wc -l)
+          if [ "$count" -eq 1 ] && [ ! -f work/pubspec.yaml ]; then
+            sub=$(find work -mindepth 1 -maxdepth 1 -type d | head -n1)
+            mv "$sub"/* work/ 2>/dev/null || true
+            mv "$sub"/.[!.]* work/ 2>/dev/null || true
+          fi
+          test -f work/pubspec.yaml
+
+      - name: Flutter pub get
+        working-directory: work
+        run: flutter pub get
+
+      - name: Build APK
+        working-directory: work
+        run: |
+          set -e
+          if [ "${{ inputs.build_type }}" = "debug" ]; then
+            flutter build apk --debug
+          else
+            flutter build apk --release
+          fi
+
+      - name: Collect APK
+        run: |
+          set -e
+          mkdir -p out
+          # cari semua apk lalu ambil yang paling mungkin (release prefer)
+          mapfile -t apks < <(find work/build -type f -name "*.apk" 2>/dev/null | sort)
+          if [ ${#apks[@]} -eq 0 ]; then
+            echo "Tidak ada file APK di work/build"
+            find work -type f -name "*.apk" || true
+            exit 1
+          fi
+          # prioritaskan app-release.apk
+          pick=""
+          for f in "${apks[@]}"; do
+            case "$f" in
+              *app-release.apk*) pick="$f"; break ;;
+            esac
+          done
+          if [ -z "$pick" ]; then
+            for f in "${apks[@]}"; do
+              case "$f" in
+                *release*.apk*) pick="$f"; break ;;
+              esac
+            done
+          fi
+          if [ -z "$pick" ]; then pick="${apks[0]}"; fi
+          cp "$pick" "out/app-${{ inputs.tag }}.apk"
+          ls -lah out/
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ inputs.tag }}
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 3
